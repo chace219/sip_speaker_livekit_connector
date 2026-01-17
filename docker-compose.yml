@@ -1,4 +1,31 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: livekit-redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - livekit-network
+
+  livekit-server:
+    image: livekit/livekit-server:latest
+    container_name: livekit-server
+    restart: always
+    ports:
+      - "7880:7880"   # HTTP API
+      - "7881:7881"   # WebRTC over TCP
+      - "7882:7882/udp"  # WebRTC over UDP (TURN)
+      - "50000-50200:50000-50200/udp"  # RTC port range
+    volumes:
+      - ./livekit-server-config.yaml:/livekit.yaml:ro
+    command: --config /livekit.yaml
+    networks:
+      - livekit-network
+    depends_on:
+      - redis
+
   asterisk:
     image: andrius/asterisk:latest
     container_name: asterisk
@@ -8,6 +35,36 @@ services:
       - "5060:5060/tcp"
       - "10000-10499:10000-10499/udp"
     volumes:
-      - ./asterisk/config:/etc/asterisk
-      - ./asterisk/logs:/var/log/asterisk
-      - ./asterisk/data:/var/lib/asterisk
+      # Mount only specific config files we need
+      - ./pjsip.conf:/etc/asterisk/pjsip.conf:ro
+      - ./extensions.conf:/etc/asterisk/extensions.conf:ro
+    networks:
+      - livekit-network
+    user: "asterisk"
+
+  livekit-sip:
+    image: livekit/sip:latest
+    container_name: livekit-sip
+    restart: always
+    ports:
+      - "5061:5061/udp"
+      - "5061:5061/tcp"
+    volumes:
+      - ./livekit-sip-config.yaml:/config.yaml:ro
+    environment:
+      - LIVEKIT_URL=${LIVEKIT_URL:-ws://livekit-server:7880}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+    command: --config /config.yaml
+    networks:
+      - livekit-network
+    depends_on:
+      - asterisk
+      - livekit-server
+
+networks:
+  livekit-network:
+    driver: bridge
+
+volumes:
+  redis-data:
